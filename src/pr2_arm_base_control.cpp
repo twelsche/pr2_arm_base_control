@@ -6,6 +6,8 @@ RobotDriver::RobotDriver(ros::NodeHandle &nh)
 {
 	nh_ = nh;
 	base_goal_sub_ = nh_.subscribe("/PRCommunicator/Precomp_Trajectory", 10, &RobotDriver::followTrajectory,this);
+
+	base_scan_sub_ = nh_.subscribe("/base_scan", 10, &RobotDriver::laserObstacleCallback,this);
 	//set up the publishers for the robot controller topics
 	cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>("/base_controller/command", 1);
 	cmd_arm_pub_ = nh_.advertise<trajectory_msgs::JointTrajectory>("/r_arm_controller/command", 1);
@@ -14,12 +16,14 @@ RobotDriver::RobotDriver(ros::NodeHandle &nh)
 	listener_.waitForTransform("odom_combined","map",  ros::Time(0), ros::Duration(10.0));
 	listener_.waitForTransform("map","base_footprint",  ros::Time(0), ros::Duration(10.0));
 	listener_.waitForTransform("map","torso_lift_link",  ros::Time(0), ros::Duration(10.0));
+	// Start planning scene client:
+	client_get_scene_ = nh_.serviceClient<moveit_msgs::GetPlanningScene>("/get_planning_scene");
 }
 
 
 
 
-// main callback function for motion generation
+// main callback function for motion generation, Following precomputed trajectory, TODO: Online motion generation from Model
 void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 {	
 	// trnaform pose array to vector of poses for base and gripper
@@ -28,21 +32,21 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	ROS_INFO("Trajectory msg with length %u received",traj_length);
 	std::vector<geometry_msgs::Pose> waypointsWorld;
 	std::vector<geometry_msgs::Pose> torsoPoints;
-	// tf::Transform offset;
-	// offset.setIdentity();
-	// tf::Vector3 translationOff(0.05,0.0,0.0);
-	// offset.setOrigin(translationOff);
+	tf::Transform offset;
+	offset.setIdentity();
+	tf::Vector3 translationOff(0.05,0.0,0.0);
+	offset.setOrigin(translationOff);
 	for (unsigned int j = 0 ; j < traj_length ; j++) 
 	{
 		if (j % 2)
 		{
-			// tf::Transform torsoTransform;
-			// tf::poseMsgToTF(msg.poses[j],torsoTransform);      
-			// torsoTransform = torsoTransform*offset;
-			// geometry_msgs::Pose poseMsg;
-			// tf::poseTFToMsg(torsoTransform,poseMsg);
-			// torsoPoints.push_back(poseMsg); 
-			torsoPoints.push_back(msg.poses[j]);
+			tf::Transform torsoTransform;
+			tf::poseMsgToTF(msg.poses[j],torsoTransform);      
+			torsoTransform = torsoTransform*offset;
+			geometry_msgs::Pose poseMsg;
+			tf::poseTFToMsg(torsoTransform,poseMsg);
+			torsoPoints.push_back(poseMsg); 
+			// torsoPoints.push_back(msg.poses[j]);
 		}      
 		else
 		{
@@ -53,7 +57,7 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 
  	// set initial pose for arm joints
 	trajectory_msgs::JointTrajectory newArmPose;
-    	trajectory_msgs::JointTrajectoryPoint jointPoint;
+    trajectory_msgs::JointTrajectoryPoint jointPoint;
 	int trajectoryLength = waypointsWorld.size();//fullBodyTraj_msg.joint_trajectory.points.size();
 	newArmPose.points.push_back(jointPoint);
 	newArmPose.points[0].time_from_start = ros::Duration(0.1);
@@ -80,15 +84,20 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		ROS_INFO_STREAM(joint_names[i].c_str());
 		if (i != 3 && i != 6) 
 		{
-			newArmPose.joint_names.push_back(joint_names[counter]);			
+			newArmPose.joint_names.push_back(joint_names[counter]);			 
 		}
 		counter++;
 	}
-
+	pr2_arm_base_control::array1d d;
+	d.a.push_back(4.5);
+	d.a.push_back(4.3);
+	pr2_arm_base_control::GMM gmm_msg;
+	geometry_msgs::Pose test;
+	gmm_msg.mu.gripperPoses.push_back(test);
+	gmm_msg.mu.basePoses.push_back(test);
 	// Collision constraint function GroupStateValidityCallbackFn(),
-	planning_scene::PlanningSceneConstPtr planning_scene;
-	// robot_state::GroupStateValidityCallbackFn constraint_callback_fn = boost::bind(&RobotDriver::validityCallbackFn,this, planning_scene, kinematic_state, _1,_2);
-
+	planning_scene::PlanningScenePtr planning_scene(new planning_scene::PlanningScene(kinematic_model));
+	robot_state::GroupStateValidityCallbackFn constraint_callback_fn = boost::bind(&validityFun::validityCallbackFn, planning_scene, kinematic_state,_2,_3);
 	// variables for execute precomputed trajectory:
 	double motionDuration = msg.header.stamp.toSec();
 	double initialTime = ros::Time::now().toSec();    	
@@ -107,6 +116,25 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	{
 		double currentTime = ros::Time::now().toSec();		
 		currentTime = (currentTime- initialTime)/10.0;
+
+		//get the current base pose
+		tf::StampedTransform current_transform;
+		try
+		{
+			// listener_.lookupTransform("odom_combined", "base_footprint", ros::Time(0), current_transform);
+			listener_.lookupTransform("map", "base_footprint", ros::Time(0), current_transform);
+		}
+		catch (tf::TransformException ex)
+		{
+			ROS_ERROR("%s",ex.what());
+			break;
+		}
+
+		// TODO: calculate desired pose based on model, currentPose and time
+		// 
+		//
+		// 
+
 		// find closest point to currentTime
 		Idx = round(trajectoryLength*currentTime/motionDuration);
 		if (Idx > trajectoryLength-1)
@@ -127,18 +155,7 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	    	cmd_torso_pub_.publish(newTorsoPose);
 		}
 
-		//get the current base pose
-		tf::StampedTransform current_transform;
-		try
-		{
-			// listener_.lookupTransform("odom_combined", "base_footprint", ros::Time(0), current_transform);
-			listener_.lookupTransform("map", "base_footprint", ros::Time(0), current_transform);
-		}
-		catch (tf::TransformException ex)
-		{
-			ROS_ERROR("%s",ex.what());
-			break;
-		}		
+				
 		// calculate base velocity based on current and desired base poses
 		tf::Transform relative_desired_pose = current_transform.inverse() * goal_transform;
 		double roll_current,pitch_current,yaw_current;
@@ -152,19 +169,42 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		// find ik for arm and command new pose:
 		tf::Transform currentGripperTransform;
 		tf::poseMsgToTF(waypointsWorld[currentPoseIdx],currentGripperTransform); 
+		// Transform to /base_footprint frame because planning scene operates here 
 		currentGripperTransform = current_transform.inverse()*currentGripperTransform;
 		geometry_msgs::Pose gripperPoseMsg;
 		tf::poseTFToMsg(currentGripperTransform,gripperPoseMsg);
 		gripperPoseMsg.position.z -=  newTorsoPose.points[0].positions[0] - 0.17;// 0.12; // offset don"t know why this is needed???????
-
 		Eigen::Affine3d state;
 		tf::poseMsgToEigen(gripperPoseMsg,state);
 		const Eigen::Affine3d &desiredState = state;
 
-		// TODO: Include collision checking with collision constraint function GroupStateValidityCallbackFn(),
+		// TODO: Include collision checking with collision constraint function GroupStateValidityCallbackFn()
+		// update planning scene
+		moveit_msgs::PlanningScene currentScene;
+		moveit_msgs::GetPlanningScene scene_srv;
+		// scene_srv.request.components.components = scene_srv.request.components.WORLD_OBJECT_GEOMETRY;
+		scene_srv.request.components.components = scene_srv.request.components.ALLOWED_COLLISION_MATRIX + 
+												  scene_srv.request.components.WORLD_OBJECT_GEOMETRY +
+												  scene_srv.request.components.OCTOMAP + 
+												  scene_srv.request.components.SCENE_SETTINGS;
+		if(!client_get_scene_.call(scene_srv))
+		{
+			ROS_WARN("Failed to call service /get_planning_scene");
+		}
+		else
+		{ 
+			currentScene = scene_srv.response.scene;
+		}
+		planning_scene->setPlanningSceneMsg(currentScene);
+
+
+		// moveit_msgs::AllowedCollisionMatrix currentACM = currentScene.allowed_collision_matrix;    
+	    // ROS_INFO("acm size: %lu",currentACM.entry_names.size());
+	    // ROS_INFO("acm name: %s",currentACM.entry_names[0].c_str());
+    
 
 		// Get IK solution from desired cartesian state:
-		bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1);
+		bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1,constraint_callback_fn);
 		// If found solution create and publish arm pose command
 		if (found_ik)
 		{
@@ -193,13 +233,20 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		// check if reached end of motion
 		if(currentTime > motionDuration){
 			done = true;
-			double dist_goal = relative_desired_pose.getOrigin().length();
+			double dist_goal = sqrt(relative_desired_pose.getOrigin().x()*relative_desired_pose.getOrigin().x()+relative_desired_pose.getOrigin().y()*relative_desired_pose.getOrigin().y());
 			ROS_INFO("Motion finished. Remaining distance for base to goal: %g m)",dist_goal);
 		} 
 		// try to keep the loop at constant rate:
 	  	rate.sleep();
 	}
 	
+}
+
+
+void RobotDriver::laserObstacleCallback(const sensor_msgs::LaserScan msg)
+{
+	// TODO: calculate modulation for velocity from obstacles in laserscan
+	// ROS_INFO("LaserScan received");
 }
 
 
@@ -217,27 +264,42 @@ int main(int argc, char** argv)
 }
 
 
-
-bool RobotDriver::validityCallbackFn(const planning_scene::PlanningSceneConstPtr &planning_scene,
-                                   	// const kinematics_constraint_aware::KinematicsRequest &request,
-                                   	// kinematics_constraint_aware::KinematicsResponse &response,
-									robot_state::RobotStatePtr kinematic_state,
-                                   	robot_state::JointModelGroup *joint_model_group,
-                                   	const std::vector<double> &joint_group_variable_values) const
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+namespace validityFun
 {
-  kinematic_state->setJointGroupPositions(joint_model_group,joint_group_variable_values);  
-  // Now check for collisions
 
-    collision_detection::CollisionRequest collision_request;
-    collision_detection::CollisionResult collision_result;  
-    // collision_request.group_name = request.group_name_;
-    planning_scene->checkCollision(collision_request, collision_result, *kinematic_state);    
-    if(collision_result.collision)
-    {
-      logDebug("IK solution is in collision");      
-      // response.error_code_.val = response.error_code_.GOAL_IN_COLLISION;
-      return false;      
-    }    
- 
-  return true;  
+	bool validityCallbackFn(planning_scene::PlanningScenePtr &planning_scene,
+	                        // const kinematics_constraint_aware::KinematicsRequest &request,
+	                        // kinematics_constraint_aware::KinematicsResponse &response,
+							robot_state::RobotStatePtr kinematic_state,
+	                        const robot_state::JointModelGroup *joint_model_group,
+	                        const double *joint_group_variable_values
+	                        // const std::vector<double> &joint_group_variable_values
+	                        ) 
+	{
+	  	kinematic_state->setJointGroupPositions(joint_model_group,joint_group_variable_values);  
+	  	// Now check for collisions	  	
+	    collision_detection::CollisionRequest collision_request;
+	    // collision_request.group_name = "right_arm";
+	    collision_detection::CollisionResult collision_result; 
+	    // ROS_INFO("Planning frame: %s",planning_scene->getPlanningFrame().c_str());
+
+
+
+	    collision_detection::AllowedCollisionMatrix acm = planning_scene->getAllowedCollisionMatrix();
+	    // moveit_msgs::AllowedCollisionMatrix acm_msg;
+	    // acm.getMessage(acm_msg);
+	    // ROS_INFO("acm_msg size: %lu",acm_msg.entry_names.size());
+	    // ROS_INFO("acm_msg name: %s",acm_msg.entry_names[0].c_str());
+	    planning_scene->checkCollision(collision_request, collision_result, planning_scene->getCurrentState());  
+	    // planning_scene->checkCollision(collision_request, collision_result, planning_scene->getCurrentState(),acm);    
+	    // planning_scene->checkCollision(collision_request, collision_result, *kinematic_state,acm);    
+	    if(collision_result.collision)
+	    {
+	      logDebug("IK solution is in collision");      
+	      // response.error_code_.val = response.error_code_.GOAL_IN_COLLISION;
+	      return false;      
+	    }    
+	  return true;  
+	}
 }

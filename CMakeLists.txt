@@ -53,11 +53,15 @@ include_directories(${Eigen_INCLUDE_DIRS})
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
+ add_message_files(
+   FILES
+   GMM.msg
+   Mu.msg
+   Sigma.msg
+   Priors.msg
+   array1d.msg
+   array2d.msg
+ )
 
 ## Generate services in the 'srv' folder
 # add_service_files(
@@ -74,10 +78,11 @@ include_directories(${Eigen_INCLUDE_DIRS})
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   geometry_msgs
-# )
+ generate_messages(
+   DEPENDENCIES
+   geometry_msgs
+   std_msgs
+ )
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
@@ -111,7 +116,7 @@ include_directories(${Eigen_INCLUDE_DIRS})
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES drive_base_test
-#  CATKIN_DEPENDS geometry_msgs roscpp
+   CATKIN_DEPENDS message_runtime
 #  DEPENDS system_lib
 )
 

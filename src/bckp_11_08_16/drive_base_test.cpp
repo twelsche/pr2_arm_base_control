@@ -4,7 +4,7 @@
 RobotDriver::RobotDriver(ros::NodeHandle &nh)
 {
 nh_ = nh;
-base_goal_sub_ = nh_.subscribe("RobotTrajectory", 10, &RobotDriver::BlindfollowTrajectory,this);
+// base_goal_sub_ = nh_.subscribe("RobotTrajectory", 10, &RobotDriver::BlindfollowTrajectory,this);
 base_goal_sub_ = nh_.subscribe("/PRCommunicator/Precomp_Trajectory", 10, &RobotDriver::followGoal2,this);
 //set up the publisher for the cmd_vel topic
 cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>("/base_controller/command", 1);
