@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   moveit_ros_perception
   moveit_ros_planning_interface
   moveit_planners_ompl
+  laser_line_extraction
 )
 
 

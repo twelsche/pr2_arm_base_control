@@ -12,6 +12,7 @@ RobotDriver::RobotDriver(ros::NodeHandle &nh)
 	cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>("/base_controller/command", 1);
 	cmd_arm_pub_ = nh_.advertise<trajectory_msgs::JointTrajectory>("/r_arm_controller/command", 1);
 	cmd_torso_pub_ = nh_.advertise<trajectory_msgs::JointTrajectory>("/torso_controller/command", 1);
+	DesPose_pub_ = nh.advertise<visualization_msgs::MarkerArray>("/Controller/DesiredPose", 1, true);
 	//wait for the listener to get the first message
 	listener_.waitForTransform("odom_combined","map",  ros::Time(0), ros::Duration(10.0));
 	listener_.waitForTransform("map","base_footprint",  ros::Time(0), ros::Duration(10.0));
@@ -115,7 +116,7 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	while (!done && nh_.ok())
 	{
 		double currentTime = ros::Time::now().toSec();		
-		currentTime = (currentTime- initialTime)/10.0;
+		currentTime = (currentTime- initialTime)/30.0;
 
 		//get the current base pose
 		tf::StampedTransform current_transform;
@@ -149,10 +150,72 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	    	// set and command new torso configuration
 	    	trajectory_msgs::JointTrajectoryPoint newTorsoPoint;
 	    	// newTorsoPoint.positions.push_back(fullBodyTraj_msg.joint_trajectory.points[currentPoseIdx].positions[nrJoints-1]);
-	    	newTorsoPoint.positions.push_back(torsoPoints[currentPoseIdx].position.z-0.75);
+	    	if (torsoPoints[currentPoseIdx].position.z-0.747 > 0.3135)
+	    		newTorsoPoint.positions.push_back(0.3135);
+	    	else
+	    		newTorsoPoint.positions.push_back(torsoPoints[currentPoseIdx].position.z-0.7467);
 	    	newTorsoPose.points[0] = newTorsoPoint;
 	    	newTorsoPose.points[0].time_from_start = ros::Duration(0.1);
 	    	cmd_torso_pub_.publish(newTorsoPose);
+
+	    	// Publsh desired Pose as marker for rviz
+	    	visualization_msgs::Marker mark;
+	        mark.header.frame_id = "/map";
+	        mark.ns = "Base";
+	        mark.id = 1;
+	        mark.type = visualization_msgs::Marker::CUBE;
+		    mark.action = visualization_msgs::Marker::ADD;
+		    mark.pose.orientation.w = 1.0;
+		    mark.scale.x = 0.05;
+		    mark.scale.y = 0.05;
+		    mark.scale.z = 0.05;
+		    mark.color.g = 1.0;
+		    mark.color.a = 1.;
+
+
+		    tf::Transform torsoPose;
+		    tf::poseMsgToTF(currentDesiredBasepose,torsoPose); 
+		    tf::Transform offsetT;
+			offsetT.setIdentity();
+			tf::Vector3 translationOffT(-0.05,0.0,0.0);     
+			offsetT.setOrigin(translationOffT);
+			torsoPose = torsoPose*offsetT;
+			geometry_msgs::Pose poseMsgT;
+			tf::poseTFToMsg(torsoPose,poseMsgT);
+		    mark.pose = poseMsgT;
+		    // mark.pose = currentDesiredBasepose;
+		    // mark.pose.position.x = torsoPoints[currentPoseIdx].position.x;
+		    // mark.pose.position.y = torsoPoints[currentPoseIdx].position.y;
+		    // mark.pose.position.z = torsoPoints[currentPoseIdx].position.z; 
+
+		    visualization_msgs::Marker mark_gripper;
+	        mark_gripper.header.frame_id = "/map";
+	        mark_gripper.ns = "Gripper";
+	        mark_gripper.id = 2;
+	        mark_gripper.type = visualization_msgs::Marker::CUBE;
+		    mark_gripper.action = visualization_msgs::Marker::ADD;
+		    mark_gripper.pose.orientation.w = 1.0;
+		    mark_gripper.scale.x = 0.05;
+		    mark_gripper.scale.y = 0.05;
+		    mark_gripper.scale.z = 0.05;
+		    mark_gripper.color.b = 1.0;
+		    mark_gripper.color.r = 1.0;
+		    mark_gripper.color.a = 1.;
+		    tf::Transform gripperPose;
+		    tf::poseMsgToTF(waypointsWorld[currentPoseIdx],gripperPose); 
+		    tf::Transform offsetGr;
+			offsetGr.setIdentity();
+			tf::Vector3 translationOffG(0.18,0.0,0.0);
+			offsetGr.setOrigin(translationOffG);     
+			gripperPose = gripperPose*offsetGr;
+			geometry_msgs::Pose poseMsg;
+			tf::poseTFToMsg(gripperPose,poseMsg);
+		    mark_gripper.pose = poseMsg;
+
+		    visualization_msgs::MarkerArray ma;
+		    ma.markers.push_back(mark);
+		    ma.markers.push_back(mark_gripper);
+		    DesPose_pub_.publish(ma);
 		}
 
 				
@@ -173,7 +236,8 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		currentGripperTransform = current_transform.inverse()*currentGripperTransform;
 		geometry_msgs::Pose gripperPoseMsg;
 		tf::poseTFToMsg(currentGripperTransform,gripperPoseMsg);
-		gripperPoseMsg.position.z -=  newTorsoPose.points[0].positions[0] - 0.17;// 0.12; // offset don"t know why this is needed???????
+		// gripperPoseMsg.position.z -= 0.17; //  newTorsoPose.points[0].positions[0] - 0.17
+		gripperPoseMsg.position.z -= newTorsoPose.points[0].positions[0] - 0.17;//  offset don"t know why this is needed??????? 
 		Eigen::Affine3d state;
 		tf::poseMsgToEigen(gripperPoseMsg,state);
 		const Eigen::Affine3d &desiredState = state;
@@ -183,19 +247,19 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		moveit_msgs::PlanningScene currentScene;
 		moveit_msgs::GetPlanningScene scene_srv;
 		// scene_srv.request.components.components = scene_srv.request.components.WORLD_OBJECT_GEOMETRY;
-		scene_srv.request.components.components = scene_srv.request.components.ALLOWED_COLLISION_MATRIX + 
-												  scene_srv.request.components.WORLD_OBJECT_GEOMETRY +
-												  scene_srv.request.components.OCTOMAP + 
-												  scene_srv.request.components.SCENE_SETTINGS;
-		if(!client_get_scene_.call(scene_srv))
-		{
-			ROS_WARN("Failed to call service /get_planning_scene");
-		}
-		else
-		{ 
-			currentScene = scene_srv.response.scene;
-		}
-		planning_scene->setPlanningSceneMsg(currentScene);
+		// scene_srv.request.components.components = scene_srv.request.components.ALLOWED_COLLISION_MATRIX + 
+		// 										  scene_srv.request.components.WORLD_OBJECT_GEOMETRY +
+		// 										  scene_srv.request.components.OCTOMAP + 
+		// 										  scene_srv.request.components.SCENE_SETTINGS;
+		// if(!client_get_scene_.call(scene_srv))
+		// {
+		// 	ROS_WARN("Failed to call service /get_planning_scene");
+		// }
+		// else
+		// { 
+		// 	currentScene = scene_srv.response.scene;
+		// }
+		// planning_scene->setPlanningSceneMsg(currentScene);
 
 
 		// moveit_msgs::AllowedCollisionMatrix currentACM = currentScene.allowed_collision_matrix;    
@@ -204,7 +268,8 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
     
 
 		// Get IK solution from desired cartesian state:
-		bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1,constraint_callback_fn);
+		// bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1,constraint_callback_fn);
+		bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1);
 		// If found solution create and publish arm pose command
 		if (found_ik)
 		{

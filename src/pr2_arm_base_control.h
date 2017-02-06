@@ -55,6 +55,7 @@ private:
   ros::Publisher cmd_vel_pub_;
   ros::Publisher cmd_arm_pub_;
   ros::Publisher cmd_torso_pub_;
+  ros::Publisher DesPose_pub_;
   ros::Subscriber base_goal_sub_;
   ros::Subscriber base_scan_sub_;
   tf::TransformListener listener_; 
