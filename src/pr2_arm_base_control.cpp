@@ -89,13 +89,13 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		}
 		counter++;
 	}
-	pr2_arm_base_control::array1d d;
-	d.a.push_back(4.5);
-	d.a.push_back(4.3);
-	pr2_arm_base_control::GMM gmm_msg;
-	geometry_msgs::Pose test;
-	gmm_msg.mu.gripperPoses.push_back(test);
-	gmm_msg.mu.basePoses.push_back(test);
+	// pr2_arm_base_control::array1d d;
+	// d.a.push_back(4.5);
+	// d.a.push_back(4.3);
+	// pr2_arm_base_control::GMM gmm_msg;
+	// geometry_msgs::Pose test;
+	// gmm_msg.mu.gripperPoses.push_back(test);
+	// gmm_msg.mu.basePoses.push_back(test);
 	// Collision constraint function GroupStateValidityCallbackFn(),
 	planning_scene::PlanningScenePtr planning_scene(new planning_scene::PlanningScene(kinematic_model));
 	robot_state::GroupStateValidityCallbackFn constraint_callback_fn = boost::bind(&validityFun::validityCallbackFn, planning_scene, kinematic_state,_2,_3);
@@ -113,11 +113,17 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	// desired rate for the control loop
 	ros::Rate rate(50.0);
 	bool done = false;
+	double slowFactor = 15.0;
+	double lastTime = ros::Time::now().toSec()- initialTime;
+	double runningTime = 0;
 	while (!done && nh_.ok())
 	{
-		double currentTime = ros::Time::now().toSec();		
-		currentTime = (currentTime- initialTime)/30.0;
+		double currentTime = ros::Time::now().toSec();	
 
+		currentTime = (currentTime- initialTime);// /slowFactor;
+
+		runningTime = runningTime + (currentTime-lastTime)/slowFactor;
+		lastTime = currentTime;
 		//get the current base pose
 		tf::StampedTransform current_transform;
 		try
@@ -137,13 +143,13 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		// 
 
 		// find closest point to currentTime
-		Idx = round(trajectoryLength*currentTime/motionDuration);
+		Idx = round(trajectoryLength*runningTime/motionDuration);
 		if (Idx > trajectoryLength-1)
 			Idx = trajectoryLength-1;
-		if (Idx != currentPoseIdx)
+		if (Idx > currentPoseIdx)
 		{			
-			currentPoseIdx = Idx;
-			ROS_INFO("currentPoseIdx: %d, trajectoryLength: %d",currentPoseIdx,trajectoryLength-1);
+			currentPoseIdx++;// = Idx;
+			ROS_INFO("currentPoseIdx: %d, trajectoryLength: %d, slowFactor: %g",currentPoseIdx,trajectoryLength-1,slowFactor);
 			currentDesiredBasepose = torsoPoints[currentPoseIdx];
 			tf::poseMsgToTF(currentDesiredBasepose,goal_transform);
 
@@ -228,6 +234,16 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		base_cmd.linear.y = relative_desired_pose.getOrigin().getY()*1.0;
 		// send out command for base velocity
 		cmd_vel_pub_.publish(base_cmd);
+		double dist2desired = sqrt(relative_desired_pose.getOrigin().getX()*relative_desired_pose.getOrigin().getX() + 
+								   relative_desired_pose.getOrigin().getY()*relative_desired_pose.getOrigin().getY());
+		if (dist2desired > 0.02)
+			slowFactor += 0.1;
+		else if (dist2desired < 0.02)
+			slowFactor -= 0.1;
+		if (slowFactor > 40)
+			slowFactor = 40;
+		else if (slowFactor < 10)
+			slowFactor = 10;
 
 		// find ik for arm and command new pose:
 		tf::Transform currentGripperTransform;
@@ -296,7 +312,7 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 			ROS_INFO("IK not found");	
 		
 		// check if reached end of motion
-		if(currentTime > motionDuration){
+		if(runningTime > motionDuration){
 			done = true;
 			double dist_goal = sqrt(relative_desired_pose.getOrigin().x()*relative_desired_pose.getOrigin().x()+relative_desired_pose.getOrigin().y()*relative_desired_pose.getOrigin().y());
 			ROS_INFO("Motion finished. Remaining distance for base to goal: %g m)",dist_goal);

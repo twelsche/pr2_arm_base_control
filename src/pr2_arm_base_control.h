@@ -39,12 +39,12 @@
 #include <moveit/robot_state/robot_state.h>
 
 // Custom messages for GMM
-#include <pr2_arm_base_control/array1d.h>
-#include <pr2_arm_base_control/array2d.h>
-#include <pr2_arm_base_control/GMM.h>
-#include <pr2_arm_base_control/Mu.h>
-#include <pr2_arm_base_control/Priors.h>
-#include <pr2_arm_base_control/Sigma.h>
+// #include <pr2_arm_base_control/array1d.h>
+// #include <pr2_arm_base_control/array2d.h>
+// #include <pr2_arm_base_control/GMM.h>
+// #include <pr2_arm_base_control/Mu.h>
+// #include <pr2_arm_base_control/Priors.h>
+// #include <pr2_arm_base_control/Sigma.h>
 
 
 class RobotDriver
