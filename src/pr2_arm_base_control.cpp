@@ -103,11 +103,12 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	double motionDuration = msg.header.stamp.toSec();
 	double initialTime = ros::Time::now().toSec();    	
 	int currentPoseIdx = 0;
+	int currentHandIdx = 0;
 	int Idx = 0;
 	geometry_msgs::Twist base_cmd;
 	tf::Transform goal_transform;
-    geometry_msgs::Transform transform;
-    geometry_msgs::Pose currentDesiredBasepose;
+	geometry_msgs::Transform transform;
+    	geometry_msgs::Pose currentDesiredBasepose;
 
 	// Loop for executing precomputed trajectory
 	// desired rate for the control loop
@@ -116,6 +117,9 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	double slowFactor = 15.0;
 	double lastTime = ros::Time::now().toSec()- initialTime;
 	double runningTime = 0;
+	double lastVel = 0;
+	double lastAngVel = 0;
+	bool hand_good = true;
 	while (!done && nh_.ok())
 	{
 		double currentTime = ros::Time::now().toSec();	
@@ -149,7 +153,7 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		if (Idx > currentPoseIdx)
 		{			
 			currentPoseIdx++;// = Idx;
-			ROS_INFO("currentPoseIdx: %d, trajectoryLength: %d, slowFactor: %g",currentPoseIdx,trajectoryLength-1,slowFactor);
+			// ROS_INFO("currentPoseIdx: %d, trajectoryLength: %d, slowFactor: %g",currentPoseIdx,trajectoryLength-1,slowFactor);
 			currentDesiredBasepose = torsoPoints[currentPoseIdx];
 			tf::poseMsgToTF(currentDesiredBasepose,goal_transform);
 
@@ -169,12 +173,13 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	        mark.header.frame_id = "/map";
 	        mark.ns = "Base";
 	        mark.id = 1;
+		double marker_size = 0.08;
 	        mark.type = visualization_msgs::Marker::CUBE;
 		    mark.action = visualization_msgs::Marker::ADD;
 		    mark.pose.orientation.w = 1.0;
-		    mark.scale.x = 0.05;
-		    mark.scale.y = 0.05;
-		    mark.scale.z = 0.05;
+		    mark.scale.x = marker_size;
+		    mark.scale.y = marker_size;
+		    mark.scale.z = marker_size;
 		    mark.color.g = 1.0;
 		    mark.color.a = 1.;
 
@@ -201,9 +206,9 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 	        mark_gripper.type = visualization_msgs::Marker::CUBE;
 		    mark_gripper.action = visualization_msgs::Marker::ADD;
 		    mark_gripper.pose.orientation.w = 1.0;
-		    mark_gripper.scale.x = 0.05;
-		    mark_gripper.scale.y = 0.05;
-		    mark_gripper.scale.z = 0.05;
+		    mark_gripper.scale.x = marker_size;
+		    mark_gripper.scale.y = marker_size;
+		    mark_gripper.scale.z = marker_size;
 		    mark_gripper.color.b = 1.0;
 		    mark_gripper.color.r = 1.0;
 		    mark_gripper.color.a = 1.;
@@ -232,8 +237,30 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		base_cmd.angular.z = yaw_current*1.0;
 		base_cmd.linear.x = relative_desired_pose.getOrigin().getX()*1.0;
 		base_cmd.linear.y = relative_desired_pose.getOrigin().getY()*1.0;
+		//if(abs(base_cmd.linear.x) > 1.5)
+			//base_cmd.linear.x = 1.5;
+		//if(abs(base_cmd.linear.y) > 1.5)
+                        //base_cmd.linear.y = 1.5;
 		// send out command for base velocity
-		cmd_vel_pub_.publish(base_cmd);
+		if(sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y)<0.015 && lastVel<0.01)   
+		{
+			base_cmd.linear.x = 0.0;
+                        base_cmd.linear.y = 0.0;
+			if(abs(base_cmd.angular.z)>0.02) // only react if angle is more then 1 degree off 
+			{
+				cmd_vel_pub_.publish(base_cmd);
+			}
+			else
+				base_cmd.angular.z = 0.0;
+		}
+		else
+		{
+			if(abs(base_cmd.angular.z)<0.02) // only react if angle is more then 1 degree off
+                        {
+				base_cmd.angular.z = 0.0;
+			}
+			cmd_vel_pub_.publish(base_cmd);
+		}
 		double dist2desired = sqrt(relative_desired_pose.getOrigin().getX()*relative_desired_pose.getOrigin().getX() + 
 								   relative_desired_pose.getOrigin().getY()*relative_desired_pose.getOrigin().getY());
 		if (dist2desired > 0.02)
@@ -242,9 +269,11 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 			slowFactor -= 0.1;
 		if (slowFactor > 40)
 			slowFactor = 40;
-		else if (slowFactor < 10)
-			slowFactor = 10;
-
+		else if (slowFactor < 2)
+			slowFactor = 2;
+		// ROS_INFO("base_cmd (%g,%g)",sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y),base_cmd.angular.z);
+		lastVel = sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y);
+		lastAngVel = base_cmd.angular.z;
 		// find ik for arm and command new pose:
 		tf::Transform currentGripperTransform;
 		tf::poseMsgToTF(waypointsWorld[currentPoseIdx],currentGripperTransform); 
@@ -258,36 +287,30 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		tf::poseMsgToEigen(gripperPoseMsg,state);
 		const Eigen::Affine3d &desiredState = state;
 
-		// TODO: Include collision checking with collision constraint function GroupStateValidityCallbackFn()
-		// update planning scene
-		moveit_msgs::PlanningScene currentScene;
-		moveit_msgs::GetPlanningScene scene_srv;
-		// scene_srv.request.components.components = scene_srv.request.components.WORLD_OBJECT_GEOMETRY;
-		// scene_srv.request.components.components = scene_srv.request.components.ALLOWED_COLLISION_MATRIX + 
-		// 										  scene_srv.request.components.WORLD_OBJECT_GEOMETRY +
-		// 										  scene_srv.request.components.OCTOMAP + 
-		// 										  scene_srv.request.components.SCENE_SETTINGS;
-		// if(!client_get_scene_.call(scene_srv))
-		// {
-		// 	ROS_WARN("Failed to call service /get_planning_scene");
-		// }
-		// else
-		// { 
-		// 	currentScene = scene_srv.response.scene;
-		// }
-		// planning_scene->setPlanningSceneMsg(currentScene);
-
-
-		// moveit_msgs::AllowedCollisionMatrix currentACM = currentScene.allowed_collision_matrix;    
-	    // ROS_INFO("acm size: %lu",currentACM.entry_names.size());
-	    // ROS_INFO("acm name: %s",currentACM.entry_names[0].c_str());
     
 
 		// Get IK solution from desired cartesian state:
 		// bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1,constraint_callback_fn);
-		bool found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1);
+		bool found_ik = false;
+		if (hand_good)
+		{
+
+			tf::poseMsgToTF(waypointsWorld[currentPoseIdx],currentGripperTransform);
+                	// Transform to /base_footprint frame because planning scene operates here 
+                	currentGripperTransform = current_transform.inverse()*currentGripperTransform;
+                	geometry_msgs::Pose gripperPoseMsg;
+                	tf::poseTFToMsg(currentGripperTransform,gripperPoseMsg);
+                	// gripperPoseMsg.position.z -= 0.17; //  newTorsoPose.points[0].positions[0] - 0.17
+                	gripperPoseMsg.position.z -= newTorsoPose.points[0].positions[0] - 0.17;//  offset don"t know why this is needed??????? 
+                	Eigen::Affine3d state;
+        	        tf::poseMsgToEigen(gripperPoseMsg,state);
+	                const Eigen::Affine3d &desiredState = state;
+
+
+			found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1);			
+		}
 		// If found solution create and publish arm pose command
-		if (found_ik)
+		if (hand_good && found_ik)
 		{
 			std::vector<double> joint_values;
 			std::vector<std::string> joint_names2;
@@ -304,15 +327,199 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 				
 			}
 			newArmPose.points[0] = armJointPoint;
-	    	newArmPose.points[0].time_from_start = ros::Duration(0.1);
+	    		newArmPose.points[0].time_from_start = ros::Duration(0.1);
 			// publish command for the new joint pose for robot arm
-	    	cmd_arm_pub_.publish(newArmPose);
+		    	cmd_arm_pub_.publish(newArmPose);
+			currentHandIdx = currentPoseIdx;
 		}	
-		else
-			ROS_INFO("IK not found");	
-		
+		else if(hand_good && !found_ik)//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+		{
+
+			std::vector<int> ik_try;
+			ik_try.push_back(-1);
+			ik_try.push_back(-10);
+			ik_try.push_back(10);
+			ik_try.push_back(-30);
+			ik_try.push_back(30);
+			ik_try.push_back(-60);
+			ik_try.push_back(60);
+			ik_try.push_back(-100);
+			ik_try.push_back(100);
+			ik_try.push_back(-150);
+			int hand_off = 0;
+			for (int i =1;i< ik_try.size(); i++)
+			{
+				tf::poseMsgToTF(waypointsWorld[currentPoseIdx+ik_try[i]],currentGripperTransform);
+                        	// Transform to /base_footprint frame because planning scene operates here 
+                        	currentGripperTransform = current_transform.inverse()*currentGripperTransform;
+                        	geometry_msgs::Pose gripperPoseMsg;
+                       	 	tf::poseTFToMsg(currentGripperTransform,gripperPoseMsg);
+                        	// gripperPoseMsg.position.z -= 0.17; //  newTorsoPose.points[0].positions[0] - 0.17
+                        	gripperPoseMsg.position.z -= newTorsoPose.points[0].positions[0] - 0.17;//  offset don"t know why this is needed??????? 
+                        	Eigen::Affine3d state;
+                	        tf::poseMsgToEigen(gripperPoseMsg,state);
+        	                const Eigen::Affine3d &desiredState = state;
+
+	
+	                        found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1);
+				if (found_ik)
+				{
+					hand_off = ik_try[i];
+					break;
+				}
+			}
+			
+			hand_good = false;
+			ROS_INFO("IK not found at currentPoseIdx: %d", currentPoseIdx);
+			if(found_ik)
+			{
+				currentHandIdx = currentPoseIdx + hand_off;
+				ROS_INFO("Found IK for hand at Idx: %d instead", currentHandIdx); 
+				std::vector<double> joint_values;
+                        	std::vector<std::string> joint_names2;
+                        	kinematic_state->copyJointGroupPositions(joint_model_group, joint_values);
+                        	trajectory_msgs::JointTrajectoryPoint armJointPoint;
+                        	int counter = 0;
+                        	for(std::size_t i=0; i < joint_names.size(); ++i)
+                        	{
+                                	if (i != 3 && i != 6)
+                                	{
+                                        	armJointPoint.positions.push_back(joint_values[counter]);
+                                        	counter++;
+                                	}
+                       		}
+                        	newArmPose.points[0] = armJointPoint;
+                	        newArmPose.points[0].time_from_start = ros::Duration(0.1);
+        	                // publish command for the new joint pose for robot arm
+	                        cmd_arm_pub_.publish(newArmPose);			
+			}
+			else
+			{
+				currentHandIdx = currentPoseIdx;
+				hand_good = true;
+				ROS_INFO("No IK found at all!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+			}
+			//ROS_INFO("base_cmd (%g,%g)",sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y),base_cmd.angular.z);
+		}
+		else //if !hand_good //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+		{
+			int count_diff = currentPoseIdx - currentHandIdx;
+			std::vector<int> ik_try;
+			if (abs(count_diff) < 20)
+			{	
+				if (count_diff < 0)
+				{
+					ik_try.push_back(count_diff);
+                                        ik_try.push_back(-1);
+                                        ik_try.push_back(0);
+                                        ik_try.push_back(1);
+                                        ik_try.push_back(10);
+                                        ik_try.push_back(50);
+				}
+				else
+				{
+					ik_try.push_back(count_diff);
+					ik_try.push_back(1);
+	                        	ik_try.push_back(10);
+	                        	ik_try.push_back(0);
+        	                	ik_try.push_back(-1);
+                	        	ik_try.push_back(-10);
+				}
+			}
+			else
+			{
+				if(count_diff <0)
+				{
+					ik_try.push_back(-10);
+                                        ik_try.push_back(-5);
+                                        ik_try.push_back(-1);
+                                        ik_try.push_back(0);
+                                        ik_try.push_back(1);
+                                        ik_try.push_back(10);
+				}
+				else
+				{
+					ik_try.push_back(10);
+                                        ik_try.push_back(5);
+                                        ik_try.push_back(1);
+                                        ik_try.push_back(0);
+                                        ik_try.push_back(-1);
+                                        ik_try.push_back(-5);
+                                        ik_try.push_back(-10);
+                                        ik_try.push_back(-20);
+				}
+			}	
+                        int hand_off = 0;
+                        for (int i =1;i< ik_try.size(); i++)
+                        {
+                               	tf::poseMsgToTF(waypointsWorld[currentHandIdx+ik_try[i]],currentGripperTransform);
+                               	// Transform to /base_footprint frame because planning scene operates here 
+                               	currentGripperTransform = current_transform.inverse()*currentGripperTransform;
+                               	geometry_msgs::Pose gripperPoseMsg;
+                               	tf::poseTFToMsg(currentGripperTransform,gripperPoseMsg);
+                               	// gripperPoseMsg.position.z -= 0.17; //  newTorsoPose.points[0].positions[0] - 0.17
+                               	gripperPoseMsg.position.z -= newTorsoPose.points[0].positions[0] - 0.17;//  offset don"t know why this is needed??????? 
+                               	Eigen::Affine3d state;
+                               	tf::poseMsgToEigen(gripperPoseMsg,state);
+                               	const Eigen::Affine3d &desiredState = state;
+
+                               	found_ik = kinematic_state->setFromIK(joint_model_group, desiredState, 5, 0.1);
+                               	if (found_ik)
+                               	{	
+                              		hand_off = ik_try[i];
+	                                break;
+                	        }
+	      	        }
+
+
+			if(found_ik)
+                        {
+                                currentHandIdx = currentPoseIdx + hand_off-count_diff;
+                                ROS_INFO("Hand moving with Idx offset of: %d ", hand_off-count_diff);
+                                std::vector<double> joint_values;
+                                std::vector<std::string> joint_names2;
+                                kinematic_state->copyJointGroupPositions(joint_model_group, joint_values);
+                                trajectory_msgs::JointTrajectoryPoint armJointPoint;
+                                int counter = 0;
+                                for(std::size_t i=0; i < joint_names.size(); ++i)
+                                {
+                                        if (i != 3 && i != 6)
+                                        {
+                                                armJointPoint.positions.push_back(joint_values[counter]);
+                                                counter++;
+                                        }
+                                }
+                                newArmPose.points[0] = armJointPoint;
+                                newArmPose.points[0].time_from_start = ros::Duration(0.1);
+                                // publish command for the new joint pose for robot arm
+                                cmd_arm_pub_.publish(newArmPose);
+                        }
+                        else
+                        {
+                                currentHandIdx = currentPoseIdx;
+                                ROS_INFO("No IK found at all!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                        }
+
+	
+			if (currentHandIdx == currentPoseIdx)
+				hand_good = true;
+
+		}
+
+
+
+
+
+
+
+
+
+
+
+
+
 		// check if reached end of motion
-		if(runningTime > motionDuration){
+		if(currentPoseIdx > trajectoryLength-5){
 			done = true;
 			double dist_goal = sqrt(relative_desired_pose.getOrigin().x()*relative_desired_pose.getOrigin().x()+relative_desired_pose.getOrigin().y()*relative_desired_pose.getOrigin().y());
 			ROS_INFO("Motion finished. Remaining distance for base to goal: %g m)",dist_goal);
