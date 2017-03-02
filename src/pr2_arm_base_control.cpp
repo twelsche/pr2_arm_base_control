@@ -245,8 +245,8 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		if(sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y)<0.015 && lastVel<0.01)   
 		{
 			base_cmd.linear.x = 0.0;
-                        base_cmd.linear.y = 0.0;
-			if(abs(base_cmd.angular.z)>0.02) // only react if angle is more then 1 degree off 
+			base_cmd.linear.y = 0.0;
+			if(std::abs(base_cmd.angular.z)>0.02) // only react if angle is more then 1 degree off 
 			{
 				cmd_vel_pub_.publish(base_cmd);
 			}
@@ -255,8 +255,9 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 		}
 		else
 		{
-			if(abs(base_cmd.angular.z)<0.02) // only react if angle is more then 1 degree off
-                        {
+			if(std::abs(base_cmd.angular.z)<0.02) // only react if angle is more then 1 degree off
+			{
+				// ROS_INFO("abs(v_a): %g, v_a: %g",std::abs(base_cmd.angular.z),base_cmd.angular.z);
 				base_cmd.angular.z = 0.0;
 			}
 			cmd_vel_pub_.publish(base_cmd);
@@ -267,10 +268,10 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 			slowFactor += 0.1;
 		else if (dist2desired < 0.02)
 			slowFactor -= 0.1;
-		if (slowFactor > 40)
-			slowFactor = 40;
-		else if (slowFactor < 2)
-			slowFactor = 2;
+		if (slowFactor > 5)
+			slowFactor = 5;
+		else if (slowFactor < 1)
+			slowFactor = 1;
 		// ROS_INFO("base_cmd (%g,%g)",sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y),base_cmd.angular.z);
 		lastVel = sqrt(base_cmd.linear.x*base_cmd.linear.x+base_cmd.linear.y*base_cmd.linear.y);
 		lastAngVel = base_cmd.angular.z;
@@ -419,11 +420,12 @@ void RobotDriver::followTrajectory(const geometry_msgs::PoseArray msg)
 				else
 				{
 					ik_try.push_back(count_diff);
-					ik_try.push_back(1);
-	                        	ik_try.push_back(10);
-	                        	ik_try.push_back(0);
-        	                	ik_try.push_back(-1);
-                	        	ik_try.push_back(-10);
+					ik_try.push_back(10);
+					ik_try.push_back(2);
+					ik_try.push_back(1);	                
+	                ik_try.push_back(0);
+        	        ik_try.push_back(-1);
+					ik_try.push_back(-10);
 				}
 			}
 			else
